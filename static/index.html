@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indic Subtitle Tool</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 560px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.82rem;
+      color: #aaa;
+      margin-bottom: 0.4rem;
+      margin-top: 1.2rem;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #e8e8e8;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, select:focus {
+      border-color: #555;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    button {
+      margin-top: 1.8rem;
+      width: 100%;
+      padding: 0.8rem;
+      background: #e8e8e8;
+      color: #0f0f0f;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    button:hover:not(:disabled) { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Status area — hidden until a job starts */
+    #status-area {
+      margin-top: 1.5rem;
+      padding: 1rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    #status-area.processing {
+      background: #1e2a1e;
+      border: 1px solid #2d4a2d;
+      color: #7ec87e;
+    }
+
+    #status-area.done {
+      background: #1a2a1a;
+      border: 1px solid #2d5a2d;
+      color: #9de09d;
+    }
+
+    #status-area.error {
+      background: #2a1a1a;
+      border: 1px solid #5a2d2d;
+      color: #e07e7e;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #7ec87e;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #download-btn {
+      margin-top: 1rem;
+      background: #2d5a2d;
+      color: #9de09d;
+      border: 1px solid #3d7a3d;
+      display: none;
+    }
+
+    #download-btn:hover { opacity: 0.85; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎙 Indic Subtitle Tool</h1>
+    <p class="subtitle">Paste a YouTube URL and get a subtitle file powered by Whisper AI.</p>
+
+    <label for="url-input">YouTube URL</label>
+    <input
+      type="url"
+      id="url-input"
+      placeholder="https://www.youtube.com/watch?v=..."
+    />
+
+    <div class="row">
+      <div>
+        <label for="lang-select">Language</label>
+        <select id="lang-select">
+          <option value="auto">Auto-detect</option>
+          <option value="en">Indian English</option>
+          <option value="hi">Hindi</option>
+          <option value="ta">Tamil</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+        </select>
+      </div>
+      <div>
+        <label for="fmt-select">Output Format</label>
+        <select id="fmt-select">
+          <option value="srt">SRT</option>
+          <option value="vtt">VTT</option>
+        </select>
+      </div>
+    </div>
+
+    <button id="generate-btn" onclick="startJob()">Generate Subtitles</button>
+
+    <div id="status-area">
+      <span id="status-icon"></span>
+      <span id="status-text"></span>
+    </div>
+
+    <button id="download-btn" onclick="downloadFile()">⬇ Download Subtitle File</button>
+  </div>
+
+  <script>
+    // currentJobId holds the job ID we get back from the server after submitting.
+    // pollInterval holds the setInterval timer so we can clear it when the job finishes.
+    let currentJobId = null;
+    let pollInterval = null;
+    let downloadUrl = null;
+
+    function setStatus(type, message) {
+      // type is "processing", "done", or "error"
+      const area = document.getElementById("status-area");
+      const icon = document.getElementById("status-icon");
+      const text = document.getElementById("status-text");
+
+      area.className = type;
+      area.style.display = "block";
+      text.textContent = message;
+
+      // Show a spinning animation while processing, a checkmark when done
+      if (type === "processing") {
+        icon.innerHTML = '<span class="spinner"></span>';
+      } else if (type === "done") {
+        icon.textContent = "✓ ";
+      } else {
+        icon.textContent = "✗ ";
+      }
+    }
+
+    async function startJob() {
+      const url = document.getElementById("url-input").value.trim();
+      const language = document.getElementById("lang-select").value;
+      const format = document.getElementById("fmt-select").value;
+
+      // Basic validation before hitting the server
+      if (!url) {
+        setStatus("error", "Please paste a YouTube URL first.");
+        return;
+      }
+
+      // Disable button and hide download button while processing
+      document.getElementById("generate-btn").disabled = true;
+      document.getElementById("download-btn").style.display = "none";
+      downloadUrl = null;
+
+      setStatus("processing", "Submitting job...");
+
+      try {
+        // POST /transcribe — kick off the job
+        const response = await fetch("/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, language, format }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || "Server error");
+        }
+
+        const data = await response.json();
+        currentJobId = data.job_id;
+
+        setStatus("processing", "Starting job...");
+
+        // Start polling /status every 3 seconds
+        pollInterval = setInterval(pollStatus, 3000);
+
+      } catch (err) {
+        setStatus("error", `Failed to start: ${err.message}`);
+        document.getElementById("generate-btn").disabled = false;
+      }
+    }
+
+    async function pollStatus() {
+      if (!currentJobId) return;
+
+      try {
+        const response = await fetch(`/status/${currentJobId}`);
+        const data = await response.json();
+
+        if (data.status === "done") {
+          clearInterval(pollInterval);
+          downloadUrl = data.download_url;
+          document.getElementById("download-btn").style.display = "block";
+          setStatus("done", data.message || "Subtitles are ready!");
+          document.getElementById("generate-btn").disabled = false;
+
+        } else if (data.status === "error") {
+          clearInterval(pollInterval);
+          setStatus("error", data.error || "Something went wrong.");
+          document.getElementById("generate-btn").disabled = false;
+
+        } else {
+          // Still processing — update the message so user sees live progress
+          setStatus("processing", data.message || "Processing...");
+        }
+      } catch (err) {
+        // Network error — don't stop polling, just wait for next tick
+        console.error("Poll error:", err);
+      }
+    }
+
+    function downloadFile() {
+      if (!downloadUrl) return;
+      // Create a temporary <a> tag and click it — triggers browser download
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  </script>
+</body>
+</html>
